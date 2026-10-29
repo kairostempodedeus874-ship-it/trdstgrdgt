@@ -1,0 +1,90 @@
+# Fly.io — configuração do servidor de WhatsApp (Kairós)
+# ---------------------------------------------------------------
+# Este arquivo já vem com o essencial configurado:
+#   - a máquina NUNCA hiberna (auto_stop_machines = false)
+#   - 1 instância sempre ligada (min_machines_running = 1)
+#   - volume persistente em /data (a sessão do WhatsApp mora ali)
+#   - porta 8080 alinhada com a checagem de saúde do Fly
+#   - verificação de saúde tolerante, com tempo de sobra para subir
+#
+# ⚠️⚠️ O NOME ABAIXO PRECISA SER IGUAL AO NOME DO APP NO FLY ⚠️⚠️
+#
+#    Se o seu endereço é  whatss-ree4jw.fly.dev  →  app = "whatss-ree4jw"
+#    Se o seu endereço é  masterrrr.fly.dev      →  app = "masterrrr"
+#
+#    Se o painel do Fly criou o app com um nome aleatório (tipo
+#    "whatss-ree4jw"), e este arquivo aponta para outro nome, o deploy vai
+#    para o app ERRADO e a checagem fica eternamente em
+#    "Checking https://...fly.dev ... Request failed".
+#    Confira o nome certo em: fly.io/apps → seu app → Settings → App name.
+#
+# Passos (terminal):
+#   1) fly launch --no-deploy --name SEU-APP
+#   2) fly volumes create wpp_auth --size 1
+#   3) fly secrets set SUPABASE_URL=... SUPABASE_ANON_KEY=...
+#   4) fly deploy
+#
+# ⚠️⚠️ A REGIÃO DO VOLUME E A REGIÃO DA MÁQUINA PRECISAM SER A MESMA ⚠️⚠️
+#
+#    Se o volume wpp_auth foi criado em AMS, primary_region tem que ser ams.
+#    Se foi criado em gru, primary_region tem que ser gru.
+#    Região diferente = a máquina não consegue montar /data e não sobe.
+app = "whatss-ree4jw"
+# A REGIÃO fica de propósito em branco: assim a máquina nasce na região padrão
+# do app — que é onde o Fly cria o volume automaticamente. Se você fixar uma
+# região aqui e o volume estiver em outra, a máquina NÃO sobe.
+# Se quiser fixar mesmo, use a mesma região do volume (ex.: primary_region = "ams").
+# primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # 8080 é a porta que o Fly espera por padrão na checagem de saúde.
+  # O servidor também escuta na 3001 como rede de segurança.
+  PORT = "8080"
+  TZ = "America/Sao_Paulo"
+  # A sessão fica DENTRO do volume montado em /data
+  WPP_AUTH_DIR = "/data/wpp-auth"
+
+# Desligamento limpo: o Fly avisa o processo (SIGTERM) e espera até 10s
+# antes de matar. Nesse tempo o servidor fecha a sessão do WhatsApp com
+# segurança — é isso que evita credencial corrompida a cada deploy.
+kill_signal = "SIGTERM"
+kill_timeout = "10s"
+
+# Cada app do Fly tem os SEUS próprios volumes. Ao criar um app novo
+# (inclusive os de nome aleatório do "Deploy from GitHub"), é obrigatório
+# criar o volume wpp_auth de novo naquele app, na MESMA região do
+# primary_region acima.
+# Sem esse volume a máquina não sobe — e o deploy até aparece "Complete".
+[[mounts]]
+  source = "wpp_auth"
+  destination = "/data"
+
+[http_service]
+  # Precisa ser a MESMA porta do PORT acima. Se ficar diferente, o log mostra
+  # "servicecheck-00-http-8080 falhou" e a máquina nunca inicia.
+  internal_port = 8080
+  force_https = true
+  # NUNCA deixar dormir: sem processo vivo a sessão do WhatsApp cai.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # Checagem de saúde no formato oficial do Fly (dentro do http_service).
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/health"
+    interval = "30s"
+    # O endpoint responde na hora; a folga de 10s protege a máquina de ser
+    # reiniciada em loop por qualquer oscilação momentânea de rede.
+    timeout = "10s"
+    # Tempo para o Node + Baileys subirem antes da primeira checagem.
+    grace_period = "60s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # 512 MB atende. Se o Fly reiniciar a máquina sozinho com frequência
+  # (memória estourada), troque para "1gb" — custa um pouco mais.
+  memory = "512mb"
